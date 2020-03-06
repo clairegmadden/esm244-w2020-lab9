@@ -1,0 +1,257 @@
+---
+title: "lab9"
+author: "Claire Madden"
+date: "3/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+```
+
+
+```{r}
+
+# install.packages only works to install things from CRAN, if something doesn't exist on CRAN then you can install directly from git using remotes::install_github("rstudio/_______")
+library(devtools)
+
+library(tidyverse)
+library(here)
+library(janitor)
+library(gt)
+library(boot)
+library(patchwork)
+library(broom)
+library(nlstools)
+
+
+```
+
+### Fun tables with 'gt'
+
+using LifeCycleSavings dataset that already exists in R
+```{r}
+# if working with percentages, keep data as decimal notation and convert just for communication into percent and make it clear in the metadata that data is stored in decimal
+
+# first convert row names into a column
+
+disp_income <- LifeCycleSavings %>% 
+  rownames_to_column() %>% 
+  arrange(dpi) %>% # arrange keeps a change in order in the dataframe
+  head(5) %>% # keep just the 5 countries with lowest dpi
+  mutate(ddpi = ddpi/100, # convert data stored as percentages to decimal values
+         pop15 = pop15/100,
+         pop75 = pop75/100)
+
+
+
+```
+
+Now let's make a nicer table with the 'gt' package:
+```{r}
+disp_income %>% 
+  gt() %>% 
+  tab_header(
+    title = "Life Cycle Savings",
+    subtitle = "5 countries with the lowest per capita disposable income"
+  ) %>% 
+  fmt_currency(
+    columns = vars(dpi),
+    decimals = 2
+  ) %>% 
+  fmt_percent(
+    columns = vars(pop15, pop75, ddpi),
+    decimals = 1
+  ) %>% 
+  tab_options(
+    table.width = pct(80) # table will be 80% of page width and update automatically
+  ) %>% 
+  tab_footnote(
+    footnote = "Data averaged from 1970 - 1980", # add footnote is so easy wowo!
+    location = cells_title() # lots of different locations that you can put a footnote reference!
+  ) %>% 
+  data_color(
+    columns = vars(dpi),
+    colors = scales::col_numeric(
+      palette = c("orange", "red", "purple"),
+      domain = c(88,190)
+    )
+  ) %>% 
+  cols_label( #update how column names show up!
+    sr = "Savings Ratio"
+  )
+
+
+
+```
+
+### Now we will bootstrap the confidence interval for salinity
+
+```{r}
+# to check out built in datasets: data() in console
+
+hist(salinity$sal)
+ggplot(data = salinity, aes(sample = sal))+
+  geom_qq() # close to linear but maybe some nonlinear blip
+
+
+# if i believe based on a single sample of n=28 that a t distribution well discribes the sampling distribution, t.test results
+
+t.test(salinity$sal)
+
+# but would really want to compare this by using bootstrapping to find a sampling distribution based on my data instead of based entirely on assumptions
+
+
+```
+
+
+Create a function to calculate the mean of different bootstrap samples:
+```{r}
+
+mean_fun <- function(x,i){mean(x[i])}
+
+sal_nc <- salinity$sal
+
+salboot_100 <- boot(data = sal_nc, # sample to use
+                    statistic = mean_fun, # funtion to apply
+                    R = 100) #how many bootstrap samples to take
+
+salboot_10k <- boot(data = sal_nc,
+                    statistic = mean_fun, 
+                    R = 10000) 
+
+# in console : salboot_100
+# original is the sample mean
+# bias is the 
+# se based on sampling distribution itself
+
+# to see sample means for each of the 100 : salboot_100$t
+
+
+salboot_100_df <- data.frame(bs_mean = salboot_100$t)
+salboot_10k_df <- data.frame(bs_mean = salboot_10k$t)
+
+# now lets plot the bootstrap sampling distribution:
+
+p1 <- ggplot(data = salinity, aes(x = sal))+
+  geom_histogram()
+
+p1
+
+p2 <- ggplot(data = salboot_100_df, aes(x = bs_mean))+
+  geom_histogram()
+
+p2
+
+p3 <- ggplot(data = salboot_10k_df, aes(x = bs_mean))+
+  geom_histogram()
+
+p3
+
+
+# using the 'patchwork' package@! ALSO PATCHWORK KNOWS PEMDAS WHAAAAAAA
+
+p1 + p2 + p3
+# "+" tells patchwork to arrange graphs horizontally
+
+p1 + p2/p3
+
+(p1 + p2)/p3
+
+# check out what patchwork can do @ patchwork.data-imaginist.com
+```
+
+
+```{r}
+
+boot.ci(salboot_10k, conf = 0.95)
+# gives 4 different types of confidence intervals!
+
+
+```
+
+### Example of non-linear least squares
+
+```{r}
+df<- read_csv(here("data", "log_growth.csv"))
+
+ggplot(data = df, aes(x = time, y = pop))+
+  geom_point()
+# exponential phase looks like it only goes to ~ hour 14
+
+# log transform to figure out linear coefficent will be slope on this graph (k)
+ggplot(data = df, aes(x = time, y = log(pop)))+
+  geom_point()
+
+
+```
+
+
+```{r}
+df_exp <- df %>% 
+  filter(time < 15) %>% 
+  mutate(ln_pop = log(pop))
+
+# plot time vs exponential log should be linear, slope = k
+
+lm_k <- lm(ln_pop ~ time, data = df_exp)
+#lm_k
+
+#estimate: growth rate ~1.7
+# carrying capacity (K) = 180
+# inital population at t=0 (A) = 18
+
+```
+
+Now, nonlinear least squares:
+```{r}
+
+# important things : outcome and predictor variable names in df are the same as in this function
+df_nls <- nls(pop ~ K/(1+A*exp(-r*time)), #writing out the population growth function
+              data = df,# match variables to dataframe called df, anything that doesnt match are the parameters to sovle for
+              start = list(K = 200, #nls needs something to start from for each parameter in the function
+                           A = 18,
+                           r = 0.18),
+              trace = TRUE) #optional argument that will report entire iterative process
+
+# nls is trying to minimize the sum of squares of residuals (left most column reported)
+
+summary(df_nls)
+
+model_out<- broom::tidy(df_nls) #cleans up the look of summary()
+model_out
+```
+
+
+```{r}
+t_seq <- seq(from = 0, to = 35, length = 200)
+
+# now make predictions from our NLS model using that new sequence of times:
+
+p_predict <- predict(df_nls, newdata = t_seq)
+
+# bind together my time and prediction data :
+df_complete <- data.frame(df, p_predict)
+
+ggplot(data = df_complete, aes(x = time, y = pop))+
+  geom_point()+
+  geom_line(aes(x = time, y = p_predict))+
+  theme_minimal()
+
+```
+
+
+```{r}
+
+df_ci <- confint2(df_nls)
+df_ci
+```
+
+
+
+
+
+
+
